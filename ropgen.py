@@ -1,4 +1,3 @@
-#!/usr/bin/python3
 import struct
 import distorm3
 import sys
@@ -13,10 +12,10 @@ qword = lambda v: struct.pack("<Q", v)
 
 class ROP:
   # We can manually set it too
-  mode  = "64"  # "32" or "64"
-  start = 0  # Start of text section or executable section
-  end   = 0x1000  # End of text section or executable section
-  va    = 0x000000000400000
+  mode  = None  # "32" or "64"
+  start = None  # Start of text section or executable section
+  end   = None  # End of text section or executable section
+  va    = None
 
   decoding = None
   uniq = []
