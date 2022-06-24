@@ -1,6 +1,6 @@
 # Ropgen
 
-A simple tool writtrn in python which finds out rop gadgets, create python functions out of them & try to generate a rop chain based on conditions provided
+A simple tool written in python which finds out rop gadgets, create python functions out of them & try to generate a rop chain based on conditions provided
 
 **Requires distorm3 package, readelf & file utility**
 
