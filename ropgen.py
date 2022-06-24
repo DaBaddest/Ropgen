@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 import struct
 import distorm3
 import sys
@@ -12,10 +13,10 @@ qword = lambda v: struct.pack("<Q", v)
 
 class ROP:
   # We can manually set it too
-  mode  = None  # "32" or "64"
-  start = None  # Start of text section or executable section
-  end   = None  # End of text section or executable section
-  va    = None
+  mode  = "64"  # "32" or "64"
+  start = 0  # Start of text section or executable section
+  end   = 0x1000  # End of text section or executable section
+  va    = 0x000000000400000
 
   decoding = None
   uniq = []
@@ -62,7 +63,7 @@ class ROP:
       this.va -= this.start
 
     if this.start is None or this.end is None:
-      this.print_warning("Finding the this.start and this.end offsets")
+      this.print_warning("Finding the start and end offsets")
 
       P = subprocess.Popen(["readelf", "-SW", this.binary_name],
                             stdin=subprocess.PIPE,
@@ -146,8 +147,17 @@ class ROP:
     if inst in this.uniq:
       return False
 
-    patterns32Bit = [r"(pop e.*?; )+ret", r"(push e.*?; )+ret", r"mov \[e\w+\], e..; ret"]
-    patterns64Bit = [r"(pop r\w+; )+ret", r"(push r\w+; )+ret", r"mov \[r\w+\], [r,e]\w+; ret", r"mov rdx, r15; mov rsi, r14; mov edi, r13d; call qword \[r12\+rbx\*8\]"]
+    patterns32Bit = [r"(pop e.*?; )+ret",
+                     r"(push e.*?; )+ret",
+                     r"mov \[e\w+\], e..; ret",
+                    ]
+
+    patterns64Bit = [r"(pop r\w+; )+ret",
+                     r"(push r\w+; )+ret",
+                     r"mov \[r\w+\], [r,e]\w+; ret",
+                     r"mov rdx, r15; mov rsi, r14; mov edi, r13d;\
+                       call qword \[r12\+rbx\*8\]",
+                     ]
 
     if distorm3.Decode32Bits == this.mode:
       patterns = patterns32Bit
@@ -276,7 +286,7 @@ class ROP:
   def padding(this, length):
     '''For padding the chain'''
     this.rop_chain += b"A" * length
-    this.rop_chain_text += f"rop_chain += b'A' * length # padding\n"
+    this.rop_chain_text += f"rop_chain += b'A' * {length} # padding\n"
 
   def call(this, address):
     '''Direct Call to address'''
@@ -286,7 +296,7 @@ class ROP:
       tmp = "dword"
     else:
       tmp = "qword"
-    this.rop_chain_text += f"rop_chain += {tmp}({address:#08x}) # calling address"
+    this.rop_chain_text += f"rop_chain += {tmp}({address:#08x}) # calling address\n"
 
   def set_reg(this, conditions):
     '''Tries to set registers'''
@@ -335,6 +345,11 @@ class ROP:
       if not flag:
         this.print_error(f"Failed in setting the condition {reg} = {value}")
 
+
+  def clean(this):
+    this.print_warning("Clearing out the chain")
+    this.rop_chain = b""
+    this.rop_chain_text = ""
 
   # XXX Implement
   def generate(this):
