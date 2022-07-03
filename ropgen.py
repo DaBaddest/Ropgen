@@ -1,5 +1,6 @@
 import subprocess
 import capstone
+import sys
 import re
 
 def print_info(s):
@@ -31,7 +32,7 @@ class ROP:
   end   = None
   VA    = None
 
-  # Stores the gadgets in address: instruction form
+  # Stores the gadgets in {address: instruction} form
   gadgets = {}
 
   def __init__(self, binary_name):
@@ -234,12 +235,13 @@ class ROP:
     to_write = ""
     for address, instructions in self.gadgets.items():
       to_write += f"{address:#08x}: " 
-      to_write += "; ".join(instructions)
-      to_write += "\n"
+      to_write += "; ".join(instructions) + "\n"
 
     # Writing gadgets to file
     with open(f"{self.binary_name}_gadgets.asm", "w") as fp:
+      fp.write(f"{len(self.gadgets)} gadgets found\n")
       fp.write(to_write)
+      print_info(f"Gadgets written to {fp.name}")
 
 
   def check_end(self, instruction):
@@ -294,3 +296,12 @@ class ROP:
 
   def make_function(self):
     pass
+
+
+# Support for commandline processing
+if len(sys.argv) <= 1:
+  exit(0)
+
+filename = sys.argv[1]
+r = ROP(filename)
+r.initialize()
