@@ -2,6 +2,6 @@
 
 A simple tool written in python which finds out rop gadgets, create python functions out of them & try to generate a rop chain based on conditions provided
 
-**Requires distorm3 package, readelf & file utility**
+**Requires capstone package & readelf utility**
 
-*Currently supports 32 & 64 bit ELF files*
+*Currently supports x86, x86-64, ARM & AArch64 architecture*
