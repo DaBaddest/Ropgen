@@ -275,7 +275,7 @@ class ROP:
 
       # blx r3 or bx sb
       # XXX: Check this
-      if re.match(r"bl?x? [^#].", instruction):
+      if re.match(r"bl?x? ..$", instruction):
         return True
 
     elif "aarch64" == self.arch:
