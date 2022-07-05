@@ -15,10 +15,10 @@ def print_error(s):
 
 class ROP:
   # Can set the following parameters manually
-  arch  = None
-  start = None
-  end   = None
-  VA    = None
+  arch      = None
+  start     = None
+  end       = None
+  base_addr = None
 
   supported_archs = {
     b"x86-64"  : "x64",
@@ -37,23 +37,27 @@ class ROP:
   gadgets = {}
   interesting_gadget = {}
 
+  # Variables required while generating chain
+  ret_gadget = None
+
   # Patterns used for selecting gadgets which might be more useful than others
-  patterns_x86     = [r"^(pop e..; )*ret"
-                      r"^(pop e..; )call e..",
-                      r"^(pop e..; )jmp e..",
-                      r"^mov dword ptr \[e..\], e..; ret",
-                     ]
+  patterns_x86 = [r"^(pop e..; )*ret"
+                  r"^(pop e..; )call e..",
+                  r"^(pop e..; )jmp e..",
+                  r"^mov dword ptr \[e..\], e..; ret",
+                 ]
 
-  patterns_x64     = [r"^(pop e..; )*ret",
-                      r"^(pop r..; )*ret",
-                      r"^mov [dq]word ptr \[r..\], r..; ret",
-                      r"^mov [dq]word ptr \[r..\], e..; ret",
-                     ]
+  patterns_x64 = [r"^(pop e..; )*ret",
+                  r"^(pop r..; )*ret",
+                  r"^mov [dq]word ptr \[r..\], r..; ret",
+                  r"^mov [dq]word ptr \[r..\], e..; ret",
+                 ]
 
-  patterns_arm     = [r"^pop {(...?, )+pc}",
-                      r"^bl?x? ...?$",
-                      r"^str.*? r..?, \[r..?\]",
-                     ]
+  patterns_arm = [r"^pop {(...?, )+pc}",
+                  r"^bl?x? ...?$",
+                  r"^str.*? r..?, \[r..?\]",
+                 ]
+
   patterns_aarch64 = None
 
   def __init__(self, binary_name):
@@ -134,11 +138,14 @@ class ROP:
 
 
   def set_offsets(self):
-    '''Finds out the start, end & VA address of the binary using readelf'''
-    if self.start is not None and self.end is not None and self.VA is not None:
+    '''Finds out the start, end & base_addr address of the binary using readelf'''
+    if self.start is not None\
+       and self.end is not None\
+       and self.base_addr is not None:
+
       print_info(f"Start:        {self.start}")
       print_info(f"End:          {self.end}")
-      print_info(f"VA:           {self.va}")
+      print_info(f"base_addr:           {self.base_addr}")
 
     else:
       print_warning("Finding the start & end offsets")
@@ -163,14 +170,14 @@ class ROP:
       # TODO: Can all the sections which are executable
       # finding ".text" from the output
       ret = self.get_section_info(b".text")
-      self.va, self.start = ret
+      self.base_addr, self.start = ret
 
       # The end of .text section would be the start of section which is after it
       self.end = self.find_next_section_info(b".text")
 
 
       # Aligning the sections to the page boundary
-      self.va -= self.start
+      self.base_addr -= self.start
 
       # XXX: These might break the script
       # self.start &= 0xfffffffffffff000
@@ -178,9 +185,9 @@ class ROP:
       # self.end += 1
 
       
-      print_info(f"Start:        {self.va + self.start:#08x}")
-      print_info(f"End:          {self.va + self.end:#08x}")
-      print_info(f"VA:           {self.va:#08x}")
+      print_info(f"Start:        {self.base_addr + self.start:#08x}")
+      print_info(f"End:          {self.base_addr + self.end:#08x}")
+      print_info(f"base_addr:           {self.base_addr:#08x}")
 
 
   def get_section_info(self, section_name):
@@ -202,7 +209,7 @@ class ROP:
     tmp = tmp.split(section_name)[1]
     tmp = tmp.split()
 
-    # Returns va & start of section respectively
+    # Returns base_addr & start of section respectively
     return (int(tmp[1], 16), int(tmp[2], 16))
 
   def find_next_section_info(self, section_name):
@@ -240,7 +247,7 @@ class ROP:
                    self.end + self.instruction_size * 2,
                    self.instruction_size):
 
-      disassembly = self.dis_engine.disasm(file_content[i:i+20], self.va + i)
+      disassembly = self.dis_engine.disasm(file_content[i:i+20], self.base_addr + i)
 
       # finding the ret instruction
       tmp  = []
@@ -261,7 +268,7 @@ class ROP:
       if tmp in self.gadgets.values():
         continue
       
-      self.gadgets[self.va + i] = tmp
+      self.gadgets[self.base_addr + i] = tmp
     
     to_write = ""
     for address, instructions in self.gadgets.items():
@@ -338,7 +345,7 @@ class ROP:
            and i not in self.interesting_gadget.values():
           
           self.interesting_gadget[address] = i
-          self.make_function(address, i)
+          self.make_function(address, i, pattern)
           to_write += f"{address:#08x}: {gadget}\n"
 
     if len(self.interesting_gadget) > 0:
@@ -347,8 +354,53 @@ class ROP:
         fp.write("\n\nInteresting Gadgets:\n" + to_write)
         print_info(f"Interesting Gadgets also written to {fp.name}")
 
-  def make_function(self, address, gadget_list):
-    pass
+  def make_function(self, address, gadget_list, pattern):
+    '''This function will try to create python functions, not fully working'''
+    gadget = '; '.join(gadget_list)
+    if "x64" == self.arch:
+      if "pop" in gadget or gadget.startswith("ret"):
+        self.make_x64_pop_function(address, gadget_list)
+
+
+  def make_x64_pop_function(self, address, gadget_list):
+    ''''''
+    func_name = ""
+    reg_list = []
+
+    if 1 == len(gadget_list):
+      if "ret" == gadget_list[0]:
+        self.ret_gadget = address
+        return
+      else:
+        print_error(f"Weird gadget found {address}: {gadget_list}")
+        return
+
+    else:
+      # Last element is ret, so we used [:-1]
+      for elem in gadget_list[:-1]:
+        # elem is of the form 'pop rbx'
+        reg = elem.split(' ')[1]
+        reg_list.append(reg)
+
+      # Joining with '_' to form a proper function name
+      func_name = f"pop_{'_'.join(reg_list)}"
+
+    # Creating the python function
+    func_prototype = f"def {func_name}("
+
+    tmp_list = []
+    for reg in reg_list:
+      tmp_list.append(f"{reg} = 0")
+
+    func_prototype += ", ".join(tmp_list) + "):\n"
+    func_prototype += f"  return qword({address:#08x})"
+
+    tmp_list = []
+    for reg in reg_list:
+      tmp_list.append(f"qword({reg})")
+
+    func_prototype += " + ".join(tmp_list) + "\n"
+    print(func_prototype)
 
 # Support for commandline processing
 if len(sys.argv) <= 1:
@@ -357,3 +409,4 @@ if len(sys.argv) <= 1:
 filename = sys.argv[1]
 r = ROP(filename)
 r.initialize()
+
