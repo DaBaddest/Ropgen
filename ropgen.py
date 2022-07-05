@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 import subprocess
 import capstone
 import sys
@@ -13,6 +14,12 @@ def print_error(s):
   print(f"\x1b[31m[!] {s}\x1b[0m")
 
 class ROP:
+  # Can set the following parameters manually
+  arch  = None
+  start = None
+  end   = None
+  VA    = None
+
   supported_archs = {
     b"x86-64"  : "x64",
     b"80386"   : "x86",
@@ -26,14 +33,28 @@ class ROP:
   # Cs(CS_ARCH_X86, CS_MODE_64)
   dis_engine = None
   
-  # Can set the following parameters manually
-  arch  = None
-  start = None
-  end   = None
-  VA    = None
-
   # Stores the gadgets in {address: instruction} form
   gadgets = {}
+  interesting_gadget = {}
+
+  # Patterns used for selecting gadgets which might be more useful than others
+  patterns_x86     = [r"^(pop e..; )*ret"
+                      r"^(pop e..; )call e..",
+                      r"^(pop e..; )jmp e..",
+                      r"^mov dword ptr \[e..\], e..; ret",
+                     ]
+
+  patterns_x64     = [r"^(pop e..; )*ret",
+                      r"^(pop r..; )*ret",
+                      r"^mov [dq]word ptr \[r..\], r..; ret",
+                      r"^mov [dq]word ptr \[r..\], e..; ret",
+                     ]
+
+  patterns_arm     = [r"^pop {(...?, )+pc}",
+                      r"^bl?x? ...?$",
+                      r"^str.*? r..?, \[r..?\]",
+                     ]
+  patterns_aarch64 = None
 
   def __init__(self, binary_name):
     self.binary_name = binary_name
@@ -83,21 +104,30 @@ class ROP:
 
   def set_mode(self):
     '''Setup the disassebmly engine based on the file architecture'''
+    '''This will also choose the regex patterns for finding useful gadgets'''
 
     # Can use match (switch) statement here
     if "x64" == self.arch:
       self.dis_engine = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
       self.instruction_size = 1
+      self.pattern = self.patterns_x64
+
     elif "x86" == self.arch:
       self.dis_engine = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
       self.instruction_size = 1
+      self.pattern = self.patterns_x86
+
     elif "arm" == self.arch:
       # Can add thumb mode too
       self.dis_engine = capstone.Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_ARM)
       self.instruction_size = 4
+      self.pattern = self.patterns_arm
+
     elif "aarch64" == self.arch:
       self.dis_engine = capstone.Cs(capstone.CS_ARCH_ARM64, capstone.CS_MODE_ARM)
       self.instruction_size = 4 # XXX: Check this
+      self.pattern = self.patterns_aarch64
+
     else:
       print_error(f"Unknown architecture {self.arch}")
       exit(1)
@@ -199,6 +229,7 @@ class ROP:
 
   def initialize(self):
     self.find_gadgets()
+    self.check_interesting()
 
   def find_gadgets(self):
     '''Reads the file & returns gadgets'''
@@ -284,6 +315,9 @@ class ROP:
       # svc #0
       if re.match(r"s[vw][ci] .*?", instruction):
         return True
+
+      if "ret" == instruction:
+        return True
       
       # XXX: Check below condition
       if re.match(r"pop {.*?, pc}", instruction):
@@ -292,11 +326,29 @@ class ROP:
     return False
 
   def check_interesting(self):
-    pass
+    '''This will try to select interesting gadgets from the found gadgets'''
+    if self.pattern is None:
+      return False
 
-  def make_function(self):
-    pass
+    to_write = ""
+    for address, i in self.gadgets.items():
+      gadget = '; '.join(i)
+      for pattern in self.pattern:
+        if re.match(pattern, gadget)\
+           and i not in self.interesting_gadget.values():
+          
+          self.interesting_gadget[address] = i
+          self.make_function(address, i)
+          to_write += f"{address:#08x}: {gadget}\n"
 
+    if len(self.interesting_gadget) > 0:
+      with open(f"{self.binary_name}_gadgets.asm", "a") as fp:
+        print(to_write)
+        fp.write("\n\nInteresting Gadgets:\n" + to_write)
+        print_info(f"Interesting Gadgets also written to {fp.name}")
+
+  def make_function(self, address, gadget_list):
+    pass
 
 # Support for commandline processing
 if len(sys.argv) <= 1:
