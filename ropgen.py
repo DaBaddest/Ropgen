@@ -1,5 +1,11 @@
 #!/usr/bin/python3
+import sys
+
+# This is used to prevent the creation of __pycache__ directory
+sys.dont_write_bytecode = True
+
 import subprocess
+import constants
 import capstone
 import sys
 import re
@@ -20,13 +26,7 @@ class ROP:
   end       = None
   base_addr = None
 
-  supported_archs = {
-    b"x86-64"  : "x64",
-    b"80386"   : "x86",
-    b"arm"     : "arm",
-    b"aarch64" : "aarch64"
-  }
-
+  # This will store the sections of the file, i.e. output of readelf
   sections = None
 
   # Capstone disassembly engine, of the form 
@@ -40,25 +40,12 @@ class ROP:
   # Variables required while generating chain
   ret_gadget = None
 
-  # Patterns used for selecting gadgets which might be more useful than others
-  patterns_x86 = [r"^(pop e..; )*ret"
-                  r"^(pop e..; )call e..",
-                  r"^(pop e..; )jmp e..",
-                  r"^mov dword ptr \[e..\], e..; ret",
-                 ]
 
-  patterns_x64 = [r"^(pop e..; )*ret",
-                  r"^(pop r..; )*ret",
-                  r"^mov [dq]word ptr \[r..\], r..; ret",
-                  r"^mov [dq]word ptr \[r..\], e..; ret",
-                 ]
-
-  patterns_arm = [r"^pop {(...?, )+pc}",
-                  r"^bl?x? ...?$",
-                  r"^str.*? r..?, \[r..?\]",
-                 ]
-
-  patterns_aarch64 = None
+  # The concept of register map is used just to prevent from overwriting
+  # registers which were previously set.
+  # For example if rdi was set earlier & then pop_r15_rdi is called for
+  # setting r15, rdi will modify as well
+  reg_map = None
 
   def __init__(self, binary_name):
     self.binary_name = binary_name
@@ -103,34 +90,40 @@ class ROP:
         print_error("Failed while determining the architecture of the binary")
         exit(1)
 
-      self.arch = self.supported_archs[tmp]
+      self.arch = constants.supported_archs[tmp]
       print_info(f"Architecture: {self.arch}")
 
   def set_mode(self):
-    '''Setup the disassebmly engine based on the file architecture'''
-    '''This will also choose the regex patterns for finding useful gadgets'''
+    '''
+    Setup the disassebmly engine based on the file architecture
+    This will also choose the regex patterns for finding useful gadgets
+    '''
 
     # Can use match (switch) statement here
     if "x64" == self.arch:
       self.dis_engine = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
       self.instruction_size = 1
-      self.pattern = self.patterns_x64
+      self.pattern = constants.patterns_x64
+      self.reg_map = constants.reg_map_x64
 
     elif "x86" == self.arch:
       self.dis_engine = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
       self.instruction_size = 1
-      self.pattern = self.patterns_x86
+      self.pattern = constants.patterns_x86
+      self.reg_map = constants.reg_map_x86
 
     elif "arm" == self.arch:
       # Can add thumb mode too
       self.dis_engine = capstone.Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_ARM)
       self.instruction_size = 4
-      self.pattern = self.patterns_arm
+      self.pattern = constants.patterns_arm
+      self.reg_map = constants.reg_map_arm
 
     elif "aarch64" == self.arch:
       self.dis_engine = capstone.Cs(capstone.CS_ARCH_ARM64, capstone.CS_MODE_ARM)
       self.instruction_size = 4 # XXX: Check this
-      self.pattern = self.patterns_aarch64
+      self.pattern = constants.patterns_aarch64
+      self.reg_map = constants.reg_map_aarch64
 
     else:
       print_error(f"Unknown architecture {self.arch}")
@@ -143,9 +136,9 @@ class ROP:
        and self.end is not None\
        and self.base_addr is not None:
 
-      print_info(f"Start:        {self.start}")
-      print_info(f"End:          {self.end}")
-      print_info(f"base_addr:           {self.base_addr}")
+      print_info(f"Start:     {self.base_addr + self.start:#08x}")
+      print_info(f"End:       {self.base_addr + self.end:#08x}")
+      print_info(f"base_addr: {self.base_addr:#08x}")
 
     else:
       print_warning("Finding the start & end offsets")
@@ -187,12 +180,13 @@ class ROP:
       
       print_info(f"Start:        {self.base_addr + self.start:#08x}")
       print_info(f"End:          {self.base_addr + self.end:#08x}")
-      print_info(f"base_addr:           {self.base_addr:#08x}")
+      print_info(f"base_addr:    {self.base_addr:#08x}")
 
 
   def get_section_info(self, section_name):
-    '''Gets section information like start & end
-      addresses from readelf's output'''
+    '''
+    Gets section information like start & end addresses from readelf's output
+    '''
     
     tmp = None
     for line in self.sections.splitlines():
@@ -283,8 +277,10 @@ class ROP:
 
 
   def check_end(self, instruction):
-    '''This will determine if the gadget was found by checking if it ends'''
-    '''with ret or similar instruction for given architecture'''
+    '''
+    This will determine if the gadget was found by checking if it ends
+    with ret or similar instruction for given architecture
+    '''
     if "x64" == self.arch:
       if "ret" == instruction or "syscall" == instruction:
         return True
@@ -393,14 +389,26 @@ class ROP:
       tmp_list.append(f"{reg} = 0")
 
     func_prototype += ", ".join(tmp_list) + "):\n"
-    func_prototype += f"  return qword({address:#08x})"
+    func_prototype += f"  return qword({address:#08x}) + "
 
     tmp_list = []
     for reg in reg_list:
       tmp_list.append(f"qword({reg})")
 
     func_prototype += " + ".join(tmp_list) + "\n"
-    print(func_prototype)
+    # input(func_prototype)
+
+  def padding(self, count = 1):
+    '''Adds padding to the rop chain'''
+    self.rop_chain += b"A" * count
+    self.rop_chain_text += f"rop_chain += b'A' * {count}\n"
+
+  def set_regs(self, conditions):
+    '''
+    Receives a dictionary of the form {"reg": value, ...} & tries
+    to fulfill that condition & adds it to our rop chain
+    '''
+    pass
 
 # Support for commandline processing
 if len(sys.argv) <= 1:
@@ -409,4 +417,3 @@ if len(sys.argv) <= 1:
 filename = sys.argv[1]
 r = ROP(filename)
 r.initialize()
-
