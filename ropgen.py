@@ -41,6 +41,62 @@ class ROP:
   ret_gadget = None
 
 
+  # List of registers the specified architecture has
+  reg_map_x64 = {
+    "rax": None,
+    "rbx": None,
+    "rcx": None,
+    "rdx": None,
+    "rdi": None,
+    "rsi": None,
+    "rsp": None,
+    "rbp": None,
+    "r8" : None,
+    "r9" : None,
+    "r10": None,
+    "r11": None,
+    "r12": None,
+    "r13": None,
+    "r14": None,
+    "r15": None,
+  }
+
+  reg_map_x86 = {
+    "eax": None,
+    "ebx": None,
+    "ecx": None,
+    "edx": None,
+    "edi": None,
+    "esi": None,
+    "esp": None,
+    "ebp": None,
+  }
+
+  reg_map_arm = {
+    "r0" : None,
+    "r1" : None,
+    "r2" : None,
+    "r3" : None,
+    "r4" : None,
+    "r5" : None,
+    "r6" : None,
+    "r7" : None,
+    "r8" : None,
+    "r9" : None,
+    "r10": None,
+    "r11": None,
+    "r12": None,
+    "r13": None,
+    "r14": None,
+    "r15": None,
+    "sp" : None,
+    "lr" : None,
+  }
+
+  reg_map_aarch64 = {
+  }
+
+
   # The concept of register map is used just to prevent from overwriting
   # registers which were previously set.
   # For example if rdi was set earlier & then pop_r15_rdi is called for
@@ -309,9 +365,9 @@ class ROP:
       if re.match(r"s[vw][ci] .*?", instruction):
         return True
 
-      # blx r3 or bx sb
+      # blx r3 or bx sb or bx r15
       # XXX: Check this
-      if re.match(r"bl?x? ..$", instruction):
+      if re.match(r"bl?x? ...?$", instruction):
         return True
 
     elif "aarch64" == self.arch:
@@ -410,6 +466,7 @@ class ROP:
     '''
     pass
 
+
 # Support for commandline processing
 if len(sys.argv) <= 1:
   exit(0)
@@ -417,3 +474,4 @@ if len(sys.argv) <= 1:
 filename = sys.argv[1]
 r = ROP(filename)
 r.initialize()
+
